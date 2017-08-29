@@ -7,8 +7,8 @@ import gym
 import tensorflow as tf
 import numpy as np
 from ou_noise import OUNoise
-from critic_network import CriticNetwork 
-from actor_network_bn import ActorNetwork
+from critic_network_thread import CriticNetwork
+from actor_network_thread import ActorNetwork
 from replay_buffer import ReplayBuffer
 
 # Hyper Parameters:
@@ -19,9 +19,12 @@ BATCH_SIZE = 64
 GAMMA = 0.99
 
 
-class DDPG:
+class DDPGThread:
     """docstring for DDPG"""
-    def __init__(self, env):
+    def __init__(self,
+                 env,
+                 thread_index,
+                 global_network):
         self.name = 'DDPG' # name for uploading results
         self.environment = env
         # Randomly initialize actor network and critic network
