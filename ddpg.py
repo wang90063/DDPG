@@ -8,7 +8,7 @@ import tensorflow as tf
 import numpy as np
 from ou_noise import OUNoise
 from critic_network_thread import CriticNetwork
-from actor_network_thread import ActorNetwork
+from actor_network import ActorNetwork
 from replay_buffer import ReplayBuffer
 
 # Hyper Parameters:
