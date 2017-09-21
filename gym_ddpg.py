@@ -1,5 +1,5 @@
 import filter_env
-from ddpg import *
+from discrete_rdpg import *
 import gc
 gc.enable()
 

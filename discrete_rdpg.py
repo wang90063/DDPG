@@ -3,39 +3,40 @@
 # Author: Flood Sung
 # Date: 2016.5.4
 # -----------------------------------
-import gym
+
 import tensorflow as tf
 import numpy as np
 from ou_noise import OUNoise
-from critic_network_thread import CriticNetwork
+from critic_network import CriticNetwork
 from actor_network import ActorNetwork
 from replay_buffer import ReplayBuffer
+from comm_env import SystemModel
 
 # Hyper Parameters:
 
-REPLAY_BUFFER_SIZE = 1000000
-REPLAY_START_SIZE = 10000
-BATCH_SIZE = 64
-GAMMA = 0.99
+from constants import REPLAY_BUFFER_SIZE
+from constants import REPLAY_START_SIZE
+from constants import BATCH_SIZE
+from constants import GAMMA
+from constants import num_user
+from constants import action_dim
 
 
-class DDPGThread:
+class DRDPG:
     """docstring for DDPG"""
     def __init__(self,
-                 env,
-                 thread_index,
-                 global_network):
-        self.name = 'DDPG' # name for uploading results
+                 env):
+        self.name = 'DRDPG' # name for uploading results
         self.environment = env
         # Randomly initialize actor network and critic network
         # with both their target networks
-        self.state_dim = env.observation_space.shape[0]
-        self.action_dim = env.action_space.shape[0]
-
+        self.state_dim = self.environment.s_t .shape[1]
+        self.action_dim = action_dim
+        self.num_user = num_user
         self.sess = tf.InteractiveSession()
 
-        self.actor_network = ActorNetwork(self.sess,self.state_dim,self.action_dim)
-        self.critic_network = CriticNetwork(self.sess,self.state_dim,self.action_dim)
+        self.actor_network = ActorNetwork(self.sess,self.state_dim,self.action_dim,self.num_user)
+        self.critic_network = CriticNetwork(self.sess,self.state_dim,self.action_dim,self.num_user)
         
         # initialize replay buffer
         self.replay_buffer = ReplayBuffer(REPLAY_BUFFER_SIZE)

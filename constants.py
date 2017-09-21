@@ -1,14 +1,13 @@
 
 
-ENCODER_LAYER1_SIZE = 400
-ENCODER_LAYER2_SIZE = 300
-COMMUN_LAYER3_SIZE = 200
+LAYER_ENCODER_SIZE = 400
 
 LEARNING_RATE = 1e-3
 TAU = 0.001
 L2 = 0.01
-
 BATCH_SIZE = 64
+max_time_step = 20
+
 
 REPLAY_BUFFER_SIZE = 1000000
 REPLAY_START_SIZE = 10000
@@ -19,4 +18,8 @@ ENV_NAME = 'InvertedPendulum-v1'
 EPISODES = 100000
 TEST = 10
 
-agent_num = 10
+num_user = 10
+num_rb = 10
+
+action_dim = 3
+
