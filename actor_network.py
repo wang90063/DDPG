@@ -4,11 +4,11 @@ import math
 
 
 # Hyper Parameters
-LAYER_ENCODER_SIZE = 400
-LAYER2_SIZE = 300
-LEARNING_RATE = 1e-4
-TAU = 0.001
-BATCH_SIZE = 64
+from constants import LAYER_ENCODER_SIZE
+from constants import LEARNING_RATE
+from constants import TAU
+from constants import BATCH_SIZE
+from constants import max_time_step
 
 class ActorNetwork:
 
@@ -31,7 +31,7 @@ class ActorNetwork:
 
     """
 
-    def __init__(self,sess,state_dim,action_dim,user_num,max_time_step):
+    def __init__(self,sess,state_dim,action_dim,user_num):
 
         self.sess = sess
         self.state_dim = state_dim
@@ -39,169 +39,237 @@ class ActorNetwork:
         self.user_num = user_num
         self.max_time_step = max_time_step
         self.batch_size = BATCH_SIZE
+        self.fc_layer_size = LAYER_ENCODER_SIZE
 
         # create actor network
 
-        self.state_input,self.action_output,self.net = self.create_network()
+        self.state_input,\
+        self.action_output, \
+        self.net, \
+        self.lstm_state, \
+        self.lstm_outputs, \
+        self.initial_lstm_state, \
+        self.step_size = self.create_network()
 
         # create target actor network
-        self.target_state_input,self.target_action_output,self.target_update,self.target_net = self.create_target_network(state_dim,action_dim,self.net)
+        self.target_state_input,\
+        self.target_action_output, \
+        self.target_net, \
+        self.target_lstm_state,\
+        self.target_lstm_outputs, \
+        self.target_initial_lstm_state,\
+        self.target_step_size = self.create_target_network()
 
         # define training rules
         self.create_training_method()
 
         self.sess.run(tf.initialize_all_variables())
 
-        self.update_target()
         #self.load_network()
 
 
 
-    def create_training_method(self,user_index):
-        self.q_gradient_input = tf.placeholder("float",[None,self.action_dim])
-        self.parameters_gradients = tf.gradients(self.action_output[user_index],self.net[user_index],-self.q_gradient_input)
-        self.optimizer = tf.train.AdamOptimizer(LEARNING_RATE).apply_gradients(zip(self.parameters_gradients,self.net[user_index]))
+    def create_training_method(self):
+        self.q_gradient_input = tf.placeholder("float",[None,self.user_num,self.action_dim])
+        self.q_gradient_input_list=tf.unpack(self.q_gradient_input,axis=2)
+        self.parameters_gradients = tf.gradients(self.action_output,self.net,-self.q_gradient_input)
+        self.optimizer = tf.train.AdamOptimizer(LEARNING_RATE).apply_gradients(zip(self.parameters_gradients,self.net))
 
 
     def create_network(self):
-        fc_layer_size = LAYER_ENCODER_SIZE
-        action_output = []
+
         weight = []
 
         # The "state_input" is the state for all the UEs along all the time steps "[time_step, batch_size, user_num, state_dim]"
-        state_input = tf.placeholder("float",[None,self.batch_size,self.user_num,self.state_dim])
+        state_input = tf.placeholder("float",[None,self.user_num,self.state_dim])
 
-        action_input = tf.placeholder("float", [None,self.batch_size,self.user_num,self.action_dim])
-        action_input_dim = action_input.get_shape().as_list()
-        zero_padding = tf.zeros([1, action_input_dim[1],action_input_dim[2],action_input_dim[3]])
-        action_input_zero_padded = tf.concat(0,[zero_padding, action_input])[0:action_input_dim[0]-2,:,:,:]
+        action_input = tf.placeholder("float", [None,self.user_num,self.state_dim])
 
-        step_size = tf.placeholder('float', [1])
+        step_size = tf.placeholder("float", [1])
 
-        initial_lstm_state0 = tf.placeholder(tf.float32, [self.batch_size, self.user_num, fc_layer_size])
-        initial_lstm_state1 = tf.placeholder(tf.float32, [self.batch_size, self.user_num, fc_layer_size])
+        initial_lstm_state = tf.placeholder(tf.float32, [2, self.user_num,self.fc_layer_size])
 
-        initial_lstm_state0_list = tf.unpack(initial_lstm_state0, axis=1)
-        initial_lstm_state1_list = tf.unpack(initial_lstm_state1, axis=1)
+        initial_lstm_state_list = tf.unpack(initial_lstm_state, axis=0)
 
-        for i in range(0,self.user_num):
-            with tf.variable_scope("ac_net_UE_"  + str(i)) as scope_pi:
-                # For each UE/agent, we use '_getitem_' in 'tf.tensor' to derive the input through time, i.e. state_input[:,:,i,:]
-                input_s = tf.reshape(state_input[:,:,i,:], [-1, self.state_dim])
-                input_a = tf.reshape(action_input_zero_padded[:,:,i,:], [-1,self.action_dim])
+        initial_lstm_state_input = tf.nn.rnn_cell.LSTMStateTuple(initial_lstm_state_list[0], initial_lstm_state_list[1])
 
+        with tf.variable_scope("ac_net_UE_") as scope_pi:
+            # For each UE/agent, we use '_getitem_' in 'tf.tensor' to derive the input through time, i.e. state_input[:,:,i,:]
+            input_s = tf.reshape(state_input, [-1, self.state_dim])
+            input_a = tf.reshape(action_input, [-1, self.action_dim])
 
+            W1_s = tf.get_variable("W1_s", [self.state_dim, self.fc_layer_size],
+                                   initializer=tf.random_uniform([self.state_dim, self.fc_layer_size],
+                                                                 -1 / math.sqrt(self.state_dim),
+                                                                 1 / math.sqrt(self.state_dim)))
+            W1_a = tf.get_variable("W1_a", [self.action_dim, self.fc_layer_size],
+                                   initializer=tf.random_uniform([self.action_dim, self.fc_layer_size],
+                                                                 -1 / math.sqrt(self.action_dim),
+                                                                 1 / math.sqrt(self.action_dim)))
 
-                W1_s = tf.get_variable("W1_s", [self.state_dim, fc_layer_size],
-                                     initializer=tf.random_uniform([self.state_dim, fc_layer_size], -1 / math.sqrt(self.state_dim),
-                                                                   1 / math.sqrt(self.state_dim)))
-                W1_a = tf.get_variable("W1_a", [self.action_dim, fc_layer_size],
-                                     initializer=tf.random_uniform([self.action_dim, fc_layer_size], -1 / math.sqrt(self.action_dim),
-                                                                   1 / math.sqrt(self.action_dim)))
+            b1 = tf.get_variable("b1", [self.fc_layer_size],
+                                 initializer=tf.random_uniform([self.fc_layer_size], -1 / math.sqrt(self.state_dim),
+                                                               1 / math.sqrt(self.state_dim)))
 
-                b1 = tf.get_variable("b1", [fc_layer_size],
-                                     initializer=tf.random_uniform([fc_layer_size], -1 / math.sqrt(self.state_dim),
-                                                                   1 / math.sqrt(self.state_dim)))
+            W2 = tf.get_variable("W2", [self.fc_layer_size, self.action_dim],
+                                 initializer=tf.random_uniform([self.fc_layer_size, self.action_dim],
+                                                               -1 / math.sqrt(self.fc_layer_size),
+                                                               1 / math.sqrt(self.fc_layer_size)))
+            b2 = tf.get_variable("b2", [self.action_dim],
+                                 initializer=tf.random_uniform([self.action_dim], -1 / math.sqrt(self.fc_layer_size),
+                                                               1 / math.sqrt(self.fc_layer_size)))
 
-                lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(fc_layer_size, state_is_tuple=True)
+            lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.fc_layer_size, state_is_tuple=True)
 
+            h_fc = tf.nn.relu(tf.matmul(input_s, W1_s) + tf.matmul(input_a, W1_a) + b1)
 
-                h_fc = tf.nn.relu(tf.matmul(input_s,W1_s)+tf.matmul(input_a, W1_a)+b1)
+            h_fc1 = tf.reshape(h_fc, [-1, self.user_num, self.fc_layer_size])
 
-                h_fc1 = tf.reshape(h_fc, [-1,self.batch_size,self.state_dim])
+            initial_lstm_state = tf.nn.rnn_cell.LSTMStateTuple(initial_lstm_state)
 
-                initial_lstm_state = tf.nn.rnn_cell.LSTMStateTuple(initial_lstm_state0_list[i],
-                                                                   initial_lstm_state1_list[i])
+            lstm_outputs, lstm_state = tf.nn.dynamic_rnn(lstm_cell,
+                                                         h_fc1,
+                                                         initial_state=initial_lstm_state_input,
+                                                         sequence_length=step_size,
+                                                         time_major=True,
+                                                         scope=scope_pi)
 
+            lstm_outputs_re = tf.reshape(lstm_outputs, [-1, self.fc_layer_size])
 
-                lstm_outputs, lstm_state = tf.nn.dynamic_rnn(lstm_cell,
-                                                                  h_fc1,
-                                                                  initial_state=initial_lstm_state,
-                                                                  sequence_length=step_size,
-                                                                  time_major=True,
-                                                                  scope=scope_pi)
+            # The dimension of 'action_output_UE' is 'time_step * batch_size'
 
-
-
-
-
-
-                action_output_agent,weight_agent = self._actor_agent(state_input)
-                action_output.append(action_output_agent)
-                weight.append(weight_agent)
-
-        return state_input,action_output,weight
-
-    def _actor_agent(self,state_input):
-        """
-        Encoder layer:
-           Before feed the state into the LSTM cell, we use a fully connected layer to encode the state
-        """
+            action_output = tf.reshape(tf.tanh(tf.matmul(lstm_outputs_re, W2) + b2),
+                                          [-1, self.user_num, self.action_dim])
 
 
+            scope_pi.reuse_variables()
+            W_lstm = tf.get_variable("BasicLSTMCell/Linear/Matrix")
+            b_lstm = tf.get_variable("BasicLSTMCell/Linear/Bias")
+            weight_UE = [W1_s, W1_a, b1, W_lstm, b_lstm, W2, b2, ]
+
+            weight.append(weight_UE)
+
+        # the dimension of 'action_output' is [user_num, time_step, batch_size, action_dim]
+
+        return state_input,action_output, weight, lstm_state, lstm_outputs, initial_lstm_state, step_size
 
 
+    def create_target_network(self):
+        weight = []
 
-        layer2_size = LAYER2_SIZE
+        # The "state_input" is the state for all the UEs along all the time steps "[time_step, batch_size, user_num, state_dim]"
+        state_input = tf.placeholder("float", [None, self.user_num, self.state_dim])
 
+        action_input = tf.placeholder("float", [None, self.user_num, self.state_dim])
 
-        W1 = tf.get_variable("W1",[state_dim,layer1_size],initializer=tf.random_uniform([state_dim,layer1_size],-1/math.sqrt(state_dim),1/math.sqrt(state_dim)))
-        b1 = tf.get_variable("b1",[layer1_size],initializer=tf.random_uniform([layer1_size],-1/math.sqrt(state_dim),1/math.sqrt(state_dim)))
-        W2 = tf.get_variable("W2",[layer1_size,layer2_size],initializer=tf.random_uniform([layer1_size,layer2_size],-1/math.sqrt(layer1_size),1/math.sqrt(layer1_size)))
-        b2 = tf.get_variable("b2",[layer2_size],initializer=tf.random_uniform([layer2_size],-1/math.sqrt(layer2_size),1/math.sqrt(layer2_size)))
-        W3 = tf.get_variable("W3",[layer2_size,action_dim],initializer=tf.random_uniform([layer2_size,action_dim],-3e-3,3e-3))
-        b3 = tf.get_variable("b3",[action_dim],initializer=tf.random_uniform([action_dim],-3e-3,3e-3))
+        step_size = tf.placeholder("float", [1])
 
-        layer1 = tf.nn.relu(tf.matmul(state_input,W1) + b1)
-        layer2 = tf.nn.relu(tf.matmul(layer1,W2) + b2)
-        action_output_agent = tf.tanh(tf.matmul(layer2,W3) + b3)
+        initial_lstm_state = tf.placeholder(tf.float32, [2, self.user_num, self.fc_layer_size])
 
-        return action_output_agent, [W1,b1,W2,b2,W3,b3]
+        initial_lstm_state_list = tf.unpack(initial_lstm_state, axis=0)
 
+        initial_lstm_state_input =tf.nn.rnn_cell.LSTMStateTuple(initial_lstm_state_list[0], initial_lstm_state_list[1])
 
-    def create_target_network(self,state_dim,action_dim,net):
-        user_num = USER_NUM
-        state_input = tf.placeholder("float",[None,state_dim])
-        ema = tf.train.ExponentialMovingAverage(decay=1-TAU)
-        target_net = []
-        target_update = []
-        action_output = []
+        with tf.variable_scope("target_ac_net_UE_") as scope_pi:
+            # For each UE/agent, we use '_getitem_' in 'tf.tensor' to derive the input through time, i.e. state_input[:,:,i,:]
+            input_s = tf.reshape(state_input, [-1, self.state_dim])
+            input_a = tf.reshape(action_input, [-1, self.action_dim])
 
-        for i in range(1,user_num+1):
-            target_update_agent = ema.apply(net[i])
-            target_update.append(target_update_agent)
-            target_net_agent = [ema.average(x) for x in net[i]]
-            target_net.append(target_net_agent)
-            layer1 = tf.nn.relu(tf.matmul(state_input, target_net_agent[0]) + target_net_agent[1])
-            layer2 = tf.nn.relu(tf.matmul(layer1, target_net_agent[2]) + target_net_agent[3])
-            action_output_agent = tf.tanh(tf.matmul(layer2, target_net_agent[4]) + target_net_agent[5])
-            action_output.append(action_output_agent)
+            W1_s = tf.get_variable("W1_s", [self.state_dim, self.fc_layer_size],
+                                   initializer=tf.random_uniform([self.state_dim, self.fc_layer_size],
+                                                                 -1 / math.sqrt(self.state_dim),
+                                                                 1 / math.sqrt(self.state_dim)))
+            W1_a = tf.get_variable("W1_a", [self.action_dim, self.fc_layer_size],
+                                   initializer=tf.random_uniform([self.action_dim, self.fc_layer_size],
+                                                                 -1 / math.sqrt(self.action_dim),
+                                                                 1 / math.sqrt(self.action_dim)))
 
-        return state_input,action_output,target_update,target_net
+            b1 = tf.get_variable("b1", [self.fc_layer_size],
+                                 initializer=tf.random_uniform([self.fc_layer_size], -1 / math.sqrt(self.state_dim),
+                                                               1 / math.sqrt(self.state_dim)))
 
-    def update_target(self):
-        self.sess.run(self.target_update)
+            W2 = tf.get_variable("W2", [self.fc_layer_size, self.action_dim],
+                                 initializer=tf.random_uniform([self.fc_layer_size, self.action_dim],
+                                                               -1 / math.sqrt(self.fc_layer_size),
+                                                               1 / math.sqrt(self.fc_layer_size)))
+            b2 = tf.get_variable("b2", [self.action_dim],
+                                 initializer=tf.random_uniform([self.action_dim], -1 / math.sqrt(self.fc_layer_size),
+                                                               1 / math.sqrt(self.fc_layer_size)))
 
-    def train(self,q_gradient_batch,state_batch):
+            lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.fc_layer_size, state_is_tuple=True)
+
+            h_fc = tf.nn.relu(tf.matmul(input_s, W1_s) + tf.matmul(input_a, W1_a) + b1)
+
+            h_fc1 = tf.reshape(h_fc, [-1, self.user_num, self.fc_layer_size])
+
+            initial_lstm_state = tf.nn.rnn_cell.LSTMStateTuple(initial_lstm_state)
+
+            lstm_outputs, lstm_state = tf.nn.dynamic_rnn(lstm_cell,
+                                                         h_fc1,
+                                                         initial_state=initial_lstm_state_input,
+                                                         sequence_length=step_size,
+                                                         time_major=True,
+                                                         scope=scope_pi)
+
+            lstm_outputs_re = tf.reshape(lstm_outputs, [-1, self.fc_layer_size])
+
+            # The dimension of 'action_output_UE' is 'time_step * batch_size'
+
+            action_output = tf.reshape(tf.tanh(tf.matmul(lstm_outputs_re, W2) + b2),
+                                       [-1, self.user_num, self.action_dim])
+
+            scope_pi.reuse_variables()
+            W_lstm = tf.get_variable("BasicLSTMCell/Linear/Matrix")
+            b_lstm = tf.get_variable("BasicLSTMCell/Linear/Bias")
+            weight_UE = [W1_s, W1_a, b1, W_lstm, b_lstm, W2, b2, ]
+
+            weight.append(weight_UE)
+
+        return state_input,action_output, weight, lstm_state, lstm_outputs, initial_lstm_state, step_size
+
+    def reset_state(self):
+        self.lstm_state = tf.nn.rnn_cell.LSTMStateTuple(np.zeros([ self.user_num, self.fc_layer_size]),
+                                                            np.zeros([ self.user_num, self.fc_layer_size]))
+
+    def train(self,q_gradient_batch,state_batch,time_step):
         self.sess.run(self.optimizer,feed_dict={
             self.q_gradient_input:q_gradient_batch,
-            self.state_input:state_batch
+            self.state_input:state_batch,
+            self.initial_lstm_state: self.lstm_state,
+            self.step_size: time_step
             })
 
-    def actions(self,state_batch):
-        return self.sess.run(self.action_output,feed_dict={
-            self.state_input:state_batch
+
+    def train_target(self):
+         self.sess.run ([
+                self.target_net[0].assign(TAU*self.net[0]+(1-TAU)*self.target_net[0]),
+                self.target_net[1].assign(TAU*self.net[1]+(1-TAU)*self.target_net[1]),
+				self.target_net[2].assign(TAU*self.net[2]+(1-TAU)*self.target_net[2]),
+				self.target_net[3].assign(TAU*self.net[3]+(1-TAU)*self.target_net[3]),
+				self.target_net[4].assign(TAU*self.net[4]+(1-TAU)*self.target_net[4]),
+				self.target_net[5].assign(TAU*self.net[5]+(1-TAU)*self.target_net[5]),
+                self.target_net[6].assign(TAU*self.net[6]+(1-TAU)*self.target_net[6])
+         ])
+
+
+    def actions(self,state_batch, lstm_state,time_step):
+        return self.sess.run(self.action_output, self.lstm_state, self.lstm_outputs,feed_dict={
+            self.state_input:state_batch,
+            self.initial_lstm_state: lstm_state,
+            self.step_size: time_step
             })
 
-    def action(self,state):
-        return self.sess.run(self.action_output,feed_dict={
-            self.state_input:[state]
-            })[0]
+    # def action(self,state):
+    #     return self.sess.run(self.action_output,feed_dict={
+    #         self.state_input:[state] self.max_time_step
+    #         })[0]
 
 
-    def target_actions(self,state_batch):
-        return self.sess.run(self.target_action_output,feed_dict={
-            self.target_state_input:state_batch
+    def target_actions(self,state_batch, target_lstm_state,time_step):
+        return self.sess.run(self.target_action_output, self.target_lstm_state, self.target_lstm_outputs    ,feed_dict={
+            self.target_state_input:state_batch,
+            self.target_initial_lstm_state: target_lstm_state,
+            self.target_step_size: time_step
             })
 
 '''
